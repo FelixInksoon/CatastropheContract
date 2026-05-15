@@ -1,0 +1,1 @@
+﻿[assembly:Godot.AssemblyHasScriptsAttribute(new System.Type[] {typeof(global::CatastropheContract.MainFile), typeof(global::CatastropheContract.ContractPanelNode), typeof(global::CatastropheContract.Bootstrap.ModEntry)})]

@@ -1,0 +1,6 @@
+[application]
+config/name="Catastrophe Contract"
+config/features=PackedStringArray("4.6", "C#", "Mobile")
+
+[dotnet]
+project/assembly_name="CatastropheContract"

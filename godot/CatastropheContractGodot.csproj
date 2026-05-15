@@ -1,0 +1,39 @@
+<Project Sdk="Godot.NET.Sdk/4.6.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CatastropheContract</AssemblyName>
+    <RootNamespace>CatastropheContract</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <RestoreSources>$(RestoreSources);D:\Program Files\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64\GodotSharp\Tools\nupkgs</RestoreSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="MainFile.cs" />
+    <Compile Include="..\src\Bootstrap\*.cs" Link="src\Bootstrap\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Content\*.cs" Link="src\Content\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Core\*.cs" Link="src\Core\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Core\Contracts\*.cs" Link="src\Core\Contracts\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Core\State\*.cs" Link="src\Core\State\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Core\UI\*.cs" Link="src\Core\UI\%(Filename)%(Extension)" />
+    <Compile Include="..\src\Patches\*.cs" Link="src\Patches\%(Filename)%(Extension)" />
+    <Compile Include="..\src\UI\*.cs" Link="src\UI\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\..\data_sts2_windows_x86_64\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="sts2">
+      <HintPath>..\..\..\data_sts2_windows_x86_64\sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BaseLib">
+      <HintPath>..\BaseLib\BaseLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

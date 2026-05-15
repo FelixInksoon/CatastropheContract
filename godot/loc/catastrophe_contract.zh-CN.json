@@ -1,0 +1,12 @@
+{
+  "cc.category.enemy_force.name": "敌方强化",
+  "cc.category.enemy_force.subtitle": "通过数值与开局节奏让敌人更具压迫感。",
+  "cc.category.player_constraint.name": "我方限制",
+  "cc.category.player_constraint.subtitle": "压缩生存、手牌与续航空间。",
+  "cc.category.economy_route.name": "经济与路线",
+  "cc.category.economy_route.subtitle": "削减资源并迫使你走更险的路线。",
+  "cc.category.rule_mutation.name": "规则改造",
+  "cc.category.rule_mutation.subtitle": "改变回合节奏与出牌逻辑。",
+  "cc.category.boss_pressure.name": "Boss强化",
+  "cc.category.boss_pressure.subtitle": "让后期首领战与普通高难度明显区分。"
+}

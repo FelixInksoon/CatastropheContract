@@ -1,0 +1,123 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/UI/ContractPanelNode.cs" id="1_script"]
+
+[node name="CatastropheContractPanel" type="Control"]
+custom_minimum_size = Vector2(360, 96)
+offset_right = 360.0
+offset_bottom = 96.0
+script = ExtResource("1_script")
+
+[node name="CompactPanel" type="PanelContainer" parent="."]
+offset_right = 360.0
+offset_bottom = 96.0
+
+[node name="CompactMargin" type="MarginContainer" parent="CompactPanel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="CompactVBox" type="VBoxContainer" parent="CompactPanel/CompactMargin"]
+theme_override_constants/separation = 8
+
+[node name="HeaderRow" type="HBoxContainer" parent="CompactPanel/CompactMargin/CompactVBox"]
+theme_override_constants/separation = 8
+
+[node name="EnableToggle" type="CheckButton" parent="CompactPanel/CompactMargin/CompactVBox/HeaderRow"]
+unique_name_in_owner = true
+text = "启用天灾合约"
+
+[node name="OpenButton" type="Button" parent="CompactPanel/CompactMargin/CompactVBox/HeaderRow"]
+unique_name_in_owner = true
+disabled = true
+text = "配置词条"
+
+[node name="CompactSummaryLabel" type="Label" parent="CompactPanel/CompactMargin/CompactVBox"]
+unique_name_in_owner = true
+autowrap_mode = 3
+text = "未启用"
+
+[node name="OverlayRoot" type="ColorRect" parent="."]
+unique_name_in_owner = true
+visible = false
+offset_right = 1920.0
+offset_bottom = 1200.0
+color = Color(0, 0, 0, 0.55)
+mouse_filter = 1
+
+[node name="SelectionPanel" type="PanelContainer" parent="OverlayRoot"]
+unique_name_in_owner = true
+visible = false
+offset_left = 300.0
+offset_top = 110.0
+offset_right = 1620.0
+offset_bottom = 1030.0
+
+[node name="WindowMargin" type="MarginContainer" parent="OverlayRoot/SelectionPanel"]
+offset_right = 1320.0
+offset_bottom = 920.0
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 18
+
+[node name="RootVBox" type="VBoxContainer" parent="OverlayRoot/SelectionPanel/WindowMargin"]
+theme_override_constants/separation = 12
+
+[node name="HeaderRow2" type="HBoxContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox"]
+theme_override_constants/separation = 8
+
+[node name="HeaderLabel" type="Label" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/HeaderRow2"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+text = "天灾合约"
+
+[node name="CloseButton" type="Button" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/HeaderRow2"]
+unique_name_in_owner = true
+text = "关闭"
+
+[node name="SubheaderLabel" type="Label" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox"]
+unique_name_in_owner = true
+autowrap_mode = 3
+text = "按维度选择词条，每组词条只能选择一个等级。"
+
+[node name="Buttons" type="HBoxContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox"]
+theme_override_constants/separation = 8
+
+[node name="SavePresetButton" type="Button" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Buttons"]
+unique_name_in_owner = true
+text = "保存预设"
+
+[node name="ClearButton" type="Button" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Buttons"]
+unique_name_in_owner = true
+text = "清空"
+
+[node name="Body" type="HSplitContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox"]
+size_flags_vertical = 3
+
+[node name="CategoryScroll" type="ScrollContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Body"]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="CategoryContainer" type="VBoxContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Body/CategoryScroll"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="SummaryPanel" type="PanelContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Body"]
+size_flags_horizontal = 2
+custom_minimum_size = Vector2(280, 0)
+
+[node name="SummaryMargin" type="MarginContainer" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Body/SummaryPanel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="SummaryLabel" type="RichTextLabel" parent="OverlayRoot/SelectionPanel/WindowMargin/RootVBox/Body/SummaryPanel/SummaryMargin"]
+unique_name_in_owner = true
+fit_content = true
+bbcode_enabled = false
+text = "挑战等级: 0"
