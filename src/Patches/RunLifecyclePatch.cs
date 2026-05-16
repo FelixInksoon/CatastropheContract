@@ -41,7 +41,7 @@ public static class RunLifecyclePatch
         }
     }
 
-    static void Prefix(System.Reflection.MethodBase __originalMethod, object __instance)
+    static void Prefix(System.Reflection.MethodBase __originalMethod, object __instance, object[] __args)
     {
         string methodName = __originalMethod.Name;
         switch (methodName)
@@ -49,7 +49,7 @@ public static class RunLifecyclePatch
             case "StartRun":
                 ModLogger.Info(
                     $"Run start observed. Enabled={ContractStateStore.CurrentRun.Enabled}, Risk={ContractStateStore.CurrentRun.RiskLevel}, Contracts=[{string.Join(", ", ContractStateStore.CurrentRun.SelectedContracts)}]");
-                ContractMutatorRegistry.ApplyRunStartMutators(__instance);
+                ContractMutatorRegistry.ApplyRunStartMutators(__instance, __args);
                 break;
             case "BeforeCombatStart":
             case "StartCombatInternal":
@@ -66,7 +66,7 @@ public static class RunLifecyclePatch
         }
     }
 
-    static void Postfix(System.Reflection.MethodBase __originalMethod, object __instance)
+    static void Postfix(System.Reflection.MethodBase __originalMethod, object __instance, object[] __args)
     {
         string methodName = __originalMethod.Name;
         switch (methodName)
@@ -75,17 +75,18 @@ public static class RunLifecyclePatch
                 ModLogger.Info("RunManager.GenerateRooms observed for future map mutation support.");
                 break;
             case "SetupPlayerTurn":
+                ContractMutatorRegistry.ApplyRunStartMutators(__instance, __args);
                 if (ContractStateStore.MarkPreCombatApplied())
                 {
                     ModLogger.Info($"Applying pre-combat mutators at SetupPlayerTurn postfix. Build={ModLogger.BuildMarker}");
-                    ContractMutatorRegistry.ApplyPreCombatMutators(__instance);
+                    ContractMutatorRegistry.ApplyPreCombatMutators(__instance, __args);
                 }
                 else
                 {
                     ModLogger.Info($"Skipping pre-combat mutators at SetupPlayerTurn postfix because they were already applied. Build={ModLogger.BuildMarker}");
                 }
 
-                ContractMutatorRegistry.ApplyTurnRuleMutators(__instance);
+                ContractMutatorRegistry.ApplyTurnRuleMutators(__instance, __args);
                 break;
             case "WinRun":
                 ContractStateStore.CommitRunResult(true);

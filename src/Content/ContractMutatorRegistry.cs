@@ -12,22 +12,49 @@ public static class ContractMutatorRegistry
     private static readonly string[] MaxHpNames = { "MaxHealth", "MaxHp", "_maxHealth", "_maxHp" };
     private static readonly string[] CurrentHpNames = { "CurrentHp", "Health", "Hp", "_health", "_hp" };
 
-    public static void ApplyRunStartMutators(object runContext)
+    public static void ApplyRunStartMutators(object runContext, params object?[] extraPlayerCandidates)
     {
         if (!ContractStateStore.CurrentRun.Enabled)
         {
             return;
         }
 
-        object? player = ContractRuntimeReflection.TryGetPlayer(runContext);
-        ModLogger.Info($"ApplyRunStartMutators resolved player={player?.GetType().FullName ?? "<null>"}.");
-        foreach (ContractDefinition contract in GetActiveContracts(ContractApplyPhase.RunStart))
+        List<ContractDefinition> pendingContracts = GetActiveContracts(ContractApplyPhase.RunStart)
+            .Where(contract => !ContractStateStore.CurrentRun.AppliedRunStartContracts.Contains(contract.Id))
+            .ToList();
+        if (pendingContracts.Count == 0)
         {
-            ApplyContract(contract, player, runContext);
+            return;
+        }
+
+        object? player = ResolvePlayer(runContext, extraPlayerCandidates);
+        ModLogger.Info($"ApplyRunStartMutators resolved player={player?.GetType().FullName ?? "<null>"}.");
+
+        bool deferredAny = false;
+        foreach (ContractDefinition contract in pendingContracts)
+        {
+            bool completed = ApplyContract(contract, player, runContext, allowDeferred: true);
+            if (completed)
+            {
+                ContractStateStore.CurrentRun.AppliedRunStartContracts.Add(contract.Id);
+            }
+            else
+            {
+                deferredAny = true;
+            }
+        }
+
+        if (deferredAny)
+        {
+            ModLogger.Info("ApplyRunStartMutators deferred because one or more run-start contracts could not be applied yet.");
+        }
+        else
+        {
+            ModLogger.Info("ApplyRunStartMutators completed.");
         }
     }
 
-    public static void ApplyPreCombatMutators(object combatContext)
+    public static void ApplyPreCombatMutators(object combatContext, params object?[] extraPlayerCandidates)
     {
         if (!ContractStateStore.CurrentRun.Enabled)
         {
@@ -36,7 +63,7 @@ public static class ContractMutatorRegistry
         }
 
         ModLogger.Debug("ApplyPreCombatMutators resolving player.");
-        object? player = ContractRuntimeReflection.TryGetPlayer(combatContext);
+        object? player = ResolvePlayer(combatContext, extraPlayerCandidates);
         ModLogger.Debug($"ApplyPreCombatMutators resolved player={player?.GetType().FullName ?? "<null>"}.");
 
         ModLogger.Debug("ApplyPreCombatMutators resolving enemies.");
@@ -50,7 +77,7 @@ public static class ContractMutatorRegistry
         }
     }
 
-    public static void ApplyTurnRuleMutators(object combatContext)
+    public static void ApplyTurnRuleMutators(object combatContext, params object?[] extraPlayerCandidates)
     {
         if (!ContractStateStore.CurrentRun.Enabled)
         {
@@ -58,7 +85,7 @@ public static class ContractMutatorRegistry
         }
 
         ContractStateStore.OnTurnStarted();
-        object? player = ContractRuntimeReflection.TryGetPlayer(combatContext);
+        object? player = ResolvePlayer(combatContext, extraPlayerCandidates);
         foreach (ContractDefinition contract in GetActiveContracts(ContractApplyPhase.TurnRule))
         {
             ApplyContract(contract, player, combatContext);
@@ -103,30 +130,31 @@ public static class ContractMutatorRegistry
         }
     }
 
-    private static void ApplyContract(ContractDefinition contract, object? primaryTarget, object? context)
+    private static bool ApplyContract(ContractDefinition contract, object? primaryTarget, object? context, bool allowDeferred = false)
     {
         if (!contract.IsImplemented)
         {
             LogUnsupported(contract, "Marked as not implemented.");
-            return;
+            return true;
         }
 
+        bool completed = true;
         foreach (ContractEffect effect in contract.Effects)
         {
             switch (effect.Kind)
             {
                 case ContractEffectKind.PlayerMaxHpLossPercent:
-                    ApplyPlayerMaxHpPercentLoss(contract, primaryTarget, effect.Value);
+                    completed &= ApplyPlayerMaxHpPercentLoss(contract, primaryTarget, effect.Value, allowDeferred);
                     break;
                 case ContractEffectKind.PotionSlotCap:
-                    ApplySetNumber(contract, primaryTarget, effect.Value, "PotionSlots", "PotionSlotCount", "MaxPotionSlots", "_potionSlots");
+                    completed &= ApplySetNumber(contract, primaryTarget, effect.Value, allowDeferred, "PotionSlots", "PotionSlotCount", "MaxPotionSlots", "_potionSlots");
                     break;
                 case ContractEffectKind.MaxHpLockedToOne:
-                    ApplySetNumber(contract, primaryTarget, 1, MaxHpNames);
-                    ApplySetNumber(contract, primaryTarget, 1, CurrentHpNames);
+                    completed &= ApplySetNumber(contract, primaryTarget, 1, allowDeferred, MaxHpNames);
+                    completed &= ApplySetNumber(contract, primaryTarget, 1, allowDeferred, CurrentHpNames);
                     break;
                 case ContractEffectKind.PlayerStartWithWeak:
-                    ApplyPowerOrFallback(
+                    completed &= ApplyPowerOrFallback(
                         contract,
                         primaryTarget,
                         primaryTarget,
@@ -136,7 +164,7 @@ public static class ContractMutatorRegistry
                         "_weak");
                     break;
                 case ContractEffectKind.PlayerStartWithFrail:
-                    ApplyPowerOrFallback(
+                    completed &= ApplyPowerOrFallback(
                         contract,
                         primaryTarget,
                         primaryTarget,
@@ -146,7 +174,7 @@ public static class ContractMutatorRegistry
                         "_frail");
                     break;
                 case ContractEffectKind.PlayerStartWithDexterityPenalty:
-                    ApplyPowerOrFallback(
+                    completed &= ApplyPowerOrFallback(
                         contract,
                         primaryTarget,
                         primaryTarget,
@@ -156,7 +184,7 @@ public static class ContractMutatorRegistry
                         "_dexterity");
                     break;
                 case ContractEffectKind.PlayerStartWithStrengthPenalty:
-                    ApplyPowerOrFallback(
+                    completed &= ApplyPowerOrFallback(
                         contract,
                         primaryTarget,
                         primaryTarget,
@@ -249,6 +277,8 @@ public static class ContractMutatorRegistry
                     break;
             }
         }
+
+        return completed;
     }
 
     private static void ApplyToEnemies(ContractDefinition contract, object? context, System.Action<object> apply)
@@ -274,19 +304,31 @@ public static class ContractMutatorRegistry
         }
     }
 
-    private static void ApplyPlayerMaxHpPercentLoss(ContractDefinition contract, object? player, double percentLoss)
+    private static bool ApplyPlayerMaxHpPercentLoss(ContractDefinition contract, object? player, double percentLoss, bool allowDeferred = false)
     {
         if (player == null)
         {
+            if (allowDeferred)
+            {
+                ModLogger.Info($"Deferring {contract.Id}: player target was not available yet.");
+                return false;
+            }
+
             LogMissingTarget(contract, "player");
-            return;
+            return false;
         }
 
         double? currentMax = ContractRuntimeReflection.TryGetNumber(player, MaxHpNames);
         if (!currentMax.HasValue)
         {
+            if (allowDeferred)
+            {
+                ModLogger.Info($"Deferring {contract.Id}: player target exists but HP members were not readable yet.");
+                return false;
+            }
+
             LogMemberMiss(contract, "MaxHealth/MaxHp");
-            return;
+            return false;
         }
 
         double reduced = currentMax.Value * (1.0 - (percentLoss / 100.0));
@@ -295,20 +337,27 @@ public static class ContractMutatorRegistry
 
         if (maxApplied && hpApplied)
         {
-            ModLogger.Info($"Applied {contract.Id}: reduced player max HP by {percentLoss}% to {reduced:0.##}.");
-            return;
+            ModLogger.Info($"Applied {contract.Id}: reduced player max HP by {percentLoss}% to {reduced:0.##}, current HP synced to {reduced:0.##}.");
+            return true;
+        }
+
+        if (allowDeferred)
+        {
+            ModLogger.Info($"Deferring {contract.Id}: player target exists but no writable HP fields were found yet.");
+            return false;
         }
 
         LogMemberMiss(contract, "Health/MaxHealth");
+        return false;
     }
 
-    private static void ApplyEnemyMaxHpBoost(ContractDefinition contract, object enemy, double percentBoost)
+    private static bool ApplyEnemyMaxHpBoost(ContractDefinition contract, object enemy, double percentBoost)
     {
         double? currentMax = ContractRuntimeReflection.TryGetNumber(enemy, MaxHpNames);
         if (!currentMax.HasValue)
         {
             LogMemberMiss(contract, "Enemy MaxHealth/MaxHp");
-            return;
+            return false;
         }
 
         double boosted = currentMax.Value * (1.0 + (percentBoost / 100.0));
@@ -317,18 +366,19 @@ public static class ContractMutatorRegistry
         if (maxApplied && hpApplied)
         {
             ModLogger.Info($"Applied {contract.Id}: enemy max HP boosted by {percentBoost}% to {boosted:0.##}.");
-            return;
+            return true;
         }
 
         LogMemberMiss(contract, "Enemy Health/MaxHealth");
+        return false;
     }
 
-    private static void ApplyDelta(ContractDefinition contract, object? target, double delta, params string[] names)
+    private static bool ApplyDelta(ContractDefinition contract, object? target, double delta, params string[] names)
     {
         if (target == null)
         {
             LogMissingTarget(contract, string.Join("/", names));
-            return;
+            return false;
         }
 
         double current = ContractRuntimeReflection.TryGetNumber(target, names) ?? 0;
@@ -336,31 +386,45 @@ public static class ContractMutatorRegistry
         if (applied)
         {
             ModLogger.Info($"Applied {contract.Id}: {string.Join("/", names)} {(delta >= 0 ? "+" : string.Empty)}{delta:0.##}.");
-            return;
+            return true;
         }
 
         LogMemberMiss(contract, string.Join("/", names));
+        return false;
     }
 
-    private static void ApplySetNumber(ContractDefinition contract, object? target, double value, params string[] names)
+    private static bool ApplySetNumber(ContractDefinition contract, object? target, double value, bool allowDeferred = false, params string[] names)
     {
         if (target == null)
         {
+            if (allowDeferred)
+            {
+                ModLogger.Info($"Deferring {contract.Id}: target '{string.Join("/", names)}' was not available yet.");
+                return false;
+            }
+
             LogMissingTarget(contract, string.Join("/", names));
-            return;
+            return false;
         }
 
         bool applied = ContractRuntimeReflection.TrySetNumber(target, value, names);
         if (applied)
         {
             ModLogger.Info($"Applied {contract.Id}: set {string.Join("/", names)} to {value:0.##}.");
-            return;
+            return true;
+        }
+
+        if (allowDeferred)
+        {
+            ModLogger.Info($"Deferring {contract.Id}: member '{string.Join("/", names)}' was not writable yet.");
+            return false;
         }
 
         LogMemberMiss(contract, string.Join("/", names));
+        return false;
     }
 
-    private static void ApplyPowerOrFallback(
+    private static bool ApplyPowerOrFallback(
         ContractDefinition contract,
         object? target,
         object? source,
@@ -371,7 +435,7 @@ public static class ContractMutatorRegistry
         if (target == null)
         {
             LogMissingTarget(contract, string.Join("/", fallbackNames));
-            return;
+            return false;
         }
 
         ModLogger.Info(
@@ -383,10 +447,10 @@ public static class ContractMutatorRegistry
         if (appliedViaPower)
         {
             ModLogger.Info($"Applied {contract.Id} via PowerCmd ({string.Join(", ", powerTypeNames)}) amount={amount:0.##}.");
-            return;
+            return true;
         }
 
-        ApplyDelta(contract, target, amount, fallbackNames);
+        return ApplyDelta(contract, target, amount, fallbackNames);
     }
 
     private static void ApplyDeathCountdown(ContractDefinition contract, object? player, int countdownTurn)
@@ -396,7 +460,7 @@ public static class ContractMutatorRegistry
             return;
         }
 
-        ApplySetNumber(contract, player, 0, CurrentHpNames);
+        ApplySetNumber(contract, player, 0, false, CurrentHpNames);
         ModLogger.Warn($"Countdown triggered for {contract.Id} on turn {ContractStateStore.CurrentRun.CurrentCombatTurn}.");
     }
 
@@ -467,5 +531,24 @@ public static class ContractMutatorRegistry
     private static void LogMemberMiss(ContractDefinition contract, string member)
     {
         ModLogger.Warn($"Failed {contract.Id}: target located but member '{member}' was not found or writable.");
+    }
+
+    private static object? ResolvePlayer(object? primaryContext, params object?[] extraPlayerCandidates)
+    {
+        List<object?> candidates = new();
+        if (primaryContext != null)
+        {
+            candidates.Add(primaryContext);
+        }
+
+        foreach (object? candidate in extraPlayerCandidates)
+        {
+            if (candidate != null)
+            {
+                candidates.Add(candidate);
+            }
+        }
+
+        return ContractRuntimeReflection.TryGetPlayerFromCandidates(candidates.ToArray());
     }
 }
