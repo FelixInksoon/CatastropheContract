@@ -13,18 +13,47 @@ namespace CatastropheContract.Content;
 internal static class ContractRuntimeReflection
 {
     private const int MaxTraversalDepth = 3;
+    private const int MaxCollectionProbeItems = 16;
     private static readonly string[] DirectPlayerMemberNames =
     {
         "Player", "_player", "LocalPlayer", "CurrentPlayer", "Owner", "Character", "CurrentCharacter", "Hero", "ControlledCreature"
+    };
+    private static readonly string[] DirectCreatureMemberNames =
+    {
+        "Creature", "_creature", "Character", "CurrentCharacter", "ControlledCreature", "_controlledCreature",
+        "CombatCreature", "_combatCreature", "Combatant", "_combatant", "Entity", "_entity", "Avatar", "_avatar"
+    };
+    private static readonly string[] PlayerCollectionMemberNames =
+    {
+        "Players", "_players", "Creatures", "_creatures", "AllCreatures", "_allCreatures", "FriendlyCreatures", "_friendlyCreatures",
+        "Combatants", "_combatants", "Participants", "_participants", "Entities", "_entities"
     };
     private static readonly string[] NestedTraversalMemberNames =
     {
         "State", "_state", "CombatState", "_combatState", "Tracker", "_tracker", "Room", "_room", "Run", "_run", "Encounter", "_encounter"
     };
+    private static readonly string[] StaticPlayerAssemblyNames = { "sts2" };
+    private static readonly object StaticPlayerMembersLock = new();
+    private static List<MemberInfo>? _staticPlayerMembers;
 
     public static object? TryGetPlayer(object context)
     {
-        return TryGetPlayerRecursive(context, 0, new HashSet<object>(ReferenceEqualityComparer.Instance));
+        return TryGetPlayerFromCandidates(context);
+    }
+
+    public static object? TryGetPlayerFromCandidates(params object?[] candidates)
+    {
+        HashSet<object> visited = new(ReferenceEqualityComparer.Instance);
+        foreach (object? candidate in candidates)
+        {
+            object? player = TryGetPlayerRecursive(candidate, 0, visited);
+            if (player != null)
+            {
+                return player;
+            }
+        }
+
+        return TryGetPlayerFromStaticMembers();
     }
 
     public static IEnumerable<object> TryGetEnemies(object? context)
@@ -81,50 +110,57 @@ internal static class ContractRuntimeReflection
 
     public static double? TryGetNumber(object source, params string[] names)
     {
-        object? value = TryGetByNames(source, names);
-        if (value == null)
+        foreach (object candidate in EnumerateMutationTargets(source))
         {
-            return null;
+            object? value = TryGetByNames(candidate, names);
+            if (value == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                return Convert.ToDouble(value);
+            }
+            catch
+            {
+            }
         }
 
-        try
-        {
-            return Convert.ToDouble(value);
-        }
-        catch
-        {
-            return null;
-        }
+        return null;
     }
 
     public static bool TrySetNumber(object source, double value, params string[] names)
     {
-        Type type = source.GetType();
-        foreach (string name in names)
+        foreach (object candidate in EnumerateMutationTargets(source))
         {
-            PropertyInfo? property = AccessTools.Property(type, name);
-            if (property != null && property.CanWrite)
+            Type type = candidate.GetType();
+            foreach (string name in names)
             {
-                try
+                PropertyInfo? property = AccessTools.Property(type, name);
+                if (property != null && property.CanWrite)
                 {
-                    property.SetValue(source, Convert.ChangeType(value, property.PropertyType));
-                    return true;
+                    try
+                    {
+                        property.SetValue(candidate, Convert.ChangeType(value, property.PropertyType));
+                        return true;
+                    }
+                    catch
+                    {
+                    }
                 }
-                catch
-                {
-                }
-            }
 
-            FieldInfo? field = AccessTools.Field(type, name);
-            if (field != null)
-            {
-                try
+                FieldInfo? field = AccessTools.Field(type, name);
+                if (field != null)
                 {
-                    field.SetValue(source, Convert.ChangeType(value, field.FieldType));
-                    return true;
-                }
-                catch
-                {
+                    try
+                    {
+                        field.SetValue(candidate, Convert.ChangeType(value, field.FieldType));
+                        return true;
+                    }
+                    catch
+                    {
+                    }
                 }
             }
         }
@@ -151,14 +187,15 @@ internal static class ContractRuntimeReflection
             return false;
         }
 
-        if (!creatureType.IsInstanceOfType(target))
+        object? resolvedTarget = TryResolveCreatureTarget(target, creatureType);
+        if (resolvedTarget == null)
         {
             ModLogger.Debug($"TryApplyPower skipped: target type {target.GetType().FullName} is not a creature.");
             return false;
         }
 
-        object powerSource = source != null && creatureType.IsInstanceOfType(source) ? source : target;
-        List<MethodInfo> candidates = FindPowerApplyMethods(powerCmdType, target.GetType(), powerType, creatureType, cardModelType).ToList();
+        object powerSource = TryResolveCreatureTarget(source, creatureType) ?? resolvedTarget;
+        List<MethodInfo> candidates = FindPowerApplyMethods(powerCmdType, resolvedTarget.GetType(), powerType, creatureType, cardModelType).ToList();
         if (candidates.Count == 0)
         {
             string powerCmdCandidates = string.Join(
@@ -169,7 +206,7 @@ internal static class ContractRuntimeReflection
                     .Select(DescribeMethod));
             string creatureCandidates = string.Join(
                 " || ",
-                target.GetType()
+                resolvedTarget.GetType()
                     .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                     .Where(method => method.Name == "ApplyPower")
                     .Select(DescribeMethod));
@@ -181,7 +218,7 @@ internal static class ContractRuntimeReflection
         ModLogger.Debug($"TryApplyPower candidates for {powerType.FullName}: {string.Join(" || ", candidates.Select(DescribeMethod))}");
 
         List<string> failures = new();
-        object? cachedPowerModel = null;
+                object? cachedPowerModel = null;
         bool powerModelInitialized = false;
 
         foreach (MethodInfo applyMethod in candidates)
@@ -191,15 +228,15 @@ internal static class ContractRuntimeReflection
                 bool needsPowerModel = applyMethod.GetParameters().Any(parameter => parameter.ParameterType.IsAssignableFrom(powerType));
                 if (needsPowerModel && !powerModelInitialized)
                 {
-                    cachedPowerModel = TryCreatePowerInstance(powerType, target, powerSource, amount);
+                    cachedPowerModel = TryCreatePowerInstance(powerType, resolvedTarget, powerSource, amount);
                     powerModelInitialized = true;
                 }
 
-                object?[] args = BuildApplyArgs(applyMethod, target, powerSource, powerType, cachedPowerModel, amount);
-                object? invokeTarget = applyMethod.IsStatic ? null : target;
+                object?[] args = BuildApplyArgs(applyMethod, resolvedTarget, powerSource, powerType, cachedPowerModel, amount);
+                object? invokeTarget = applyMethod.IsStatic ? null : resolvedTarget;
 
                 ModLogger.Debug(
-                    $"TryApplyPower invoking {DescribeMethod(applyMethod)} return={applyMethod.ReturnType.FullName} with power={powerType.FullName}, amount={amount}, target={target.GetType().FullName}, source={powerSource.GetType().FullName}");
+                    $"TryApplyPower invoking {DescribeMethod(applyMethod)} return={applyMethod.ReturnType.FullName} with power={powerType.FullName}, amount={amount}, target={resolvedTarget.GetType().FullName}, source={powerSource.GetType().FullName}");
                 object? result = applyMethod.Invoke(invokeTarget, args);
                 if (result is Task task)
                 {
@@ -210,12 +247,12 @@ internal static class ContractRuntimeReflection
                         throw rootTaskException;
                     }
 
-                    AttachTaskLogging(task, powerType, target, applyMethod);
-                    ModLogger.Info($"Post-apply power state for {target.GetType().FullName} (deferred): {DescribePowerState(target)}");
+                    AttachTaskLogging(task, powerType, resolvedTarget, applyMethod);
+                    ModLogger.Info($"Post-apply power state for {resolvedTarget.GetType().FullName} (deferred): {DescribePowerState(resolvedTarget)}");
                     return true;
                 }
 
-                ModLogger.Info($"Post-apply power state for {target.GetType().FullName}: {DescribePowerState(target)}");
+                ModLogger.Info($"Post-apply power state for {resolvedTarget.GetType().FullName}: {DescribePowerState(resolvedTarget)}");
                 return true;
             }
             catch (Exception exception)
@@ -229,6 +266,17 @@ internal static class ContractRuntimeReflection
 
         ModLogger.Warn($"TryApplyPower failed for {powerType.FullName}. Attempts: {string.Join(" || ", failures)}");
         return false;
+    }
+
+    public static object? TryGetCreature(object? context)
+    {
+        Type? creatureType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Entities.Creatures.Creature");
+        if (creatureType == null)
+        {
+            return null;
+        }
+
+        return TryResolveCreatureTarget(context, creatureType);
     }
 
     private static object? TryGetPlayerRecursive(object? context, int depth, HashSet<object> visited)
@@ -253,6 +301,12 @@ internal static class ContractRuntimeReflection
             }
         }
 
+        object? collectionPlayer = TryGetPlayerFromCollections(context, depth, visited);
+        if (collectionPlayer != null)
+        {
+            return collectionPlayer;
+        }
+
         foreach (string nestedName in NestedTraversalMemberNames)
         {
             object? nested = TryGetByNames(context, nestedName);
@@ -260,6 +314,57 @@ internal static class ContractRuntimeReflection
             if (found != null)
             {
                 return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static object? TryGetPlayerFromCollections(object context, int depth, HashSet<object> visited)
+    {
+        foreach (string collectionName in PlayerCollectionMemberNames)
+        {
+            object? collection = TryGetByNames(context, collectionName);
+            object? player = TryGetPlayerFromEnumerable(collection, depth, visited);
+            if (player != null)
+            {
+                return player;
+            }
+        }
+
+        return null;
+    }
+
+    private static object? TryGetPlayerFromEnumerable(object? value, int depth, HashSet<object> visited)
+    {
+        if (value is not IEnumerable enumerable || value is string)
+        {
+            return null;
+        }
+
+        int inspected = 0;
+        foreach (object? item in enumerable)
+        {
+            if (item == null)
+            {
+                continue;
+            }
+
+            if (IsPlayerLike(item))
+            {
+                return item;
+            }
+
+            object? found = TryGetPlayerRecursive(item, depth + 1, visited);
+            if (found != null)
+            {
+                return found;
+            }
+
+            inspected += 1;
+            if (inspected >= MaxCollectionProbeItems)
+            {
+                break;
             }
         }
 
@@ -338,8 +443,211 @@ internal static class ContractRuntimeReflection
     private static bool IsPlayerLike(object instance)
     {
         string fullName = instance.GetType().FullName ?? string.Empty;
-        return fullName.Contains("Player", StringComparison.OrdinalIgnoreCase)
+        return fullName.Contains(".Entities.Players.", StringComparison.OrdinalIgnoreCase)
+            || fullName.EndsWith(".Player", StringComparison.OrdinalIgnoreCase)
+            || fullName.Contains("Player", StringComparison.OrdinalIgnoreCase)
             || fullName.Contains("LocalPlayer", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static object? TryResolveCreatureTarget(object? candidate, Type creatureType)
+    {
+        return TryResolveCreatureTarget(candidate, creatureType, 0, new HashSet<object>(ReferenceEqualityComparer.Instance));
+    }
+
+    private static object? TryResolveCreatureTarget(object? candidate, Type creatureType, int depth, HashSet<object> visited)
+    {
+        if (candidate == null || depth > MaxTraversalDepth || !visited.Add(candidate))
+        {
+            return null;
+        }
+
+        if (creatureType.IsInstanceOfType(candidate))
+        {
+            return candidate;
+        }
+
+        object? direct = TryGetByNames(candidate, DirectCreatureMemberNames);
+        if (direct != null)
+        {
+            object? resolved = TryResolveCreatureTarget(direct, creatureType, depth + 1, visited);
+            if (resolved != null)
+            {
+                return resolved;
+            }
+        }
+
+        foreach (string nestedName in NestedTraversalMemberNames)
+        {
+            object? nested = TryGetByNames(candidate, nestedName);
+            object? resolved = TryResolveCreatureTarget(nested, creatureType, depth + 1, visited);
+            if (resolved != null)
+            {
+                return resolved;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<object> EnumerateMutationTargets(object source)
+    {
+        HashSet<object> yielded = new(ReferenceEqualityComparer.Instance);
+        foreach (object candidate in EnumerateMutationTargetsRecursive(source, 0, yielded))
+        {
+            yield return candidate;
+        }
+    }
+
+    private static IEnumerable<object> EnumerateMutationTargetsRecursive(object? source, int depth, HashSet<object> yielded)
+    {
+        if (source == null || depth > MaxTraversalDepth || !yielded.Add(source))
+        {
+            yield break;
+        }
+
+        yield return source;
+
+        foreach (string name in DirectCreatureMemberNames)
+        {
+            object? nested = TryGetByNames(source, name);
+            foreach (object candidate in EnumerateMutationTargetsRecursive(nested, depth + 1, yielded))
+            {
+                yield return candidate;
+            }
+        }
+
+        foreach (string name in DirectPlayerMemberNames)
+        {
+            object? nested = TryGetByNames(source, name);
+            foreach (object candidate in EnumerateMutationTargetsRecursive(nested, depth + 1, yielded))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static object? TryGetPlayerFromStaticMembers()
+    {
+        foreach (MemberInfo member in GetStaticPlayerMembers())
+        {
+            object? value = TryGetStaticMemberValue(member);
+            if (value == null)
+            {
+                continue;
+            }
+
+            object? direct = TryGetPlayerRecursive(value, 0, new HashSet<object>(ReferenceEqualityComparer.Instance));
+            if (direct != null)
+            {
+                return direct;
+            }
+
+            object? collectionPlayer = TryGetPlayerFromEnumerable(value, 0, new HashSet<object>(ReferenceEqualityComparer.Instance));
+            if (collectionPlayer != null)
+            {
+                return collectionPlayer;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<MemberInfo> GetStaticPlayerMembers()
+    {
+        if (_staticPlayerMembers != null)
+        {
+            return _staticPlayerMembers;
+        }
+
+        lock (StaticPlayerMembersLock)
+        {
+            if (_staticPlayerMembers != null)
+            {
+                return _staticPlayerMembers;
+            }
+
+            List<MemberInfo> members = new();
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                string? assemblyName = assembly.GetName().Name;
+                if (assemblyName == null || !StaticPlayerAssemblyNames.Contains(assemblyName, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                foreach (Type type in GetTypesSafe(assembly))
+                {
+                    AddMatchingStaticMembers(type, members);
+                }
+            }
+
+            _staticPlayerMembers = members;
+            ModLogger.Info($"Cached {_staticPlayerMembers.Count} static player member candidates for runtime lookup.");
+            return _staticPlayerMembers;
+        }
+    }
+
+    private static void AddMatchingStaticMembers(Type type, ICollection<MemberInfo> members)
+    {
+        const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
+        foreach (PropertyInfo property in type.GetProperties(Flags))
+        {
+            if (property.GetMethod == null || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            if (!DirectPlayerMemberNames.Contains(property.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            members.Add(property);
+        }
+
+        foreach (FieldInfo field in type.GetFields(Flags))
+        {
+            if (!DirectPlayerMemberNames.Contains(field.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            members.Add(field);
+        }
+    }
+
+    private static object? TryGetStaticMemberValue(MemberInfo member)
+    {
+        try
+        {
+            if (member is PropertyInfo property)
+            {
+                return property.GetValue(null);
+            }
+
+            if (member is FieldInfo field)
+            {
+                return field.GetValue(null);
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<Type> GetTypesSafe(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type => type != null)!;
+        }
     }
 
     private static Type? TryResolveTypeByNames(params string[] names)
