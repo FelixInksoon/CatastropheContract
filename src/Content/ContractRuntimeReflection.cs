@@ -268,6 +268,91 @@ internal static class ContractRuntimeReflection
         return false;
     }
 
+    public static bool TryHeal(object? target, object? source, double amount)
+    {
+        if (target == null || amount <= 0.001d)
+        {
+            return false;
+        }
+
+        Type? creatureType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Entities.Creatures.Creature");
+        Type? creatureCmdType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Commands.CreatureCmd");
+        if (creatureType == null)
+        {
+            ModLogger.Debug("TryHeal skipped: creature type was not found.");
+            return false;
+        }
+
+        object? resolvedTarget = TryResolveCreatureTarget(target, creatureType);
+        if (resolvedTarget == null)
+        {
+            ModLogger.Debug($"TryHeal skipped: target type {target.GetType().FullName} is not a creature.");
+            return false;
+        }
+
+        object? resolvedSource = TryResolveCreatureTarget(source, creatureType) ?? resolvedTarget;
+        Type targetType = resolvedTarget.GetType();
+        List<MethodInfo> candidates = new();
+        if (creatureCmdType != null)
+        {
+            candidates.AddRange(
+                creatureCmdType
+                    .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                    .Where(method => IsCompatibleHealMethod(method, creatureType, requireStatic: true)));
+        }
+
+        candidates.AddRange(
+            targetType
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(method => IsCompatibleHealMethod(method, creatureType, requireStatic: false)));
+
+        candidates = candidates
+            .Distinct()
+            .OrderBy(method => ScoreHealMethod(method, creatureType))
+            .ThenBy(method => method.IsStatic ? 1 : 0)
+            .ThenBy(method => method.GetParameters().Length)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            ModLogger.Debug("TryHeal found no compatible Heal methods.");
+            return false;
+        }
+
+        List<string> failures = new();
+        foreach (MethodInfo healMethod in candidates)
+        {
+            try
+            {
+                object?[] args = BuildHealArgs(healMethod, resolvedTarget, resolvedSource, amount);
+                object? invokeTarget = healMethod.IsStatic ? null : resolvedTarget;
+                object? result = healMethod.Invoke(invokeTarget, args);
+                if (result is Task task)
+                {
+                    if (task.IsFaulted)
+                    {
+                        Exception rootTaskException = task.Exception?.GetBaseException() ?? new InvalidOperationException("Heal task faulted.");
+                        throw rootTaskException;
+                    }
+
+                    task.GetAwaiter().GetResult();
+                }
+
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Exception root = exception is TargetInvocationException targetInvocation && targetInvocation.InnerException != null
+                    ? targetInvocation.InnerException
+                    : exception;
+                failures.Add($"{DescribeMethod(healMethod)} => {root.GetType().Name}: {root.Message}");
+            }
+        }
+
+        ModLogger.Warn($"TryHeal failed for {resolvedTarget.GetType().FullName}. Attempts: {string.Join(" || ", failures)}");
+        return false;
+    }
+
     public static object? TryGetCreature(object? context)
     {
         Type? creatureType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Entities.Creatures.Creature");
@@ -1072,6 +1157,49 @@ internal static class ContractRuntimeReflection
             .ThenBy(method => method.GetParameters().Length);
     }
 
+    private static bool IsCompatibleHealMethod(MethodInfo method, Type creatureType, bool requireStatic)
+    {
+        if (method.Name != "Heal" || method.IsStatic != requireStatic)
+        {
+            return false;
+        }
+
+        ParameterInfo[] parameters = method.GetParameters();
+        if (parameters.Length == 0)
+        {
+            return false;
+        }
+
+        bool hasCreature = parameters.Any(parameter => parameter.ParameterType.IsAssignableFrom(creatureType));
+        bool hasAmount = parameters.Any(parameter => IsNumericLike(parameter.ParameterType));
+        return hasCreature && hasAmount;
+    }
+
+    private static int ScoreHealMethod(MethodInfo method, Type creatureType)
+    {
+        int score = 0;
+        ParameterInfo[] parameters = method.GetParameters();
+        if (parameters.Length > 0)
+        {
+            ParameterInfo first = parameters[0];
+            if (first.ParameterType == creatureType)
+            {
+                score -= 4;
+            }
+            else if (first.ParameterType.IsAssignableFrom(creatureType))
+            {
+                score -= 3;
+            }
+        }
+
+        if (parameters.Any(parameter => parameter.Name?.Contains("amount", StringComparison.OrdinalIgnoreCase) == true))
+        {
+            score -= 2;
+        }
+
+        return score;
+    }
+
     private static MethodInfo? TryMakeGenericApplyMethod(MethodInfo method, Type powerType)
     {
         if (!method.IsGenericMethodDefinition || method.GetGenericArguments().Length != 1)
@@ -1213,6 +1341,61 @@ internal static class ContractRuntimeReflection
             {
                 args[i] = null;
             }
+        }
+
+        return args;
+    }
+
+    private static object?[] BuildHealArgs(MethodInfo healMethod, object target, object source, double amount)
+    {
+        ParameterInfo[] parameters = healMethod.GetParameters();
+        object?[] args = new object?[parameters.Length];
+        bool assignedTargetCreature = false;
+
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            ParameterInfo parameter = parameters[i];
+            Type parameterType = parameter.ParameterType;
+            string parameterName = parameter.Name ?? string.Empty;
+
+            if (parameterType.IsAssignableFrom(target.GetType()))
+            {
+                if (!assignedTargetCreature || parameterName.Contains("target", StringComparison.OrdinalIgnoreCase) || parameterName.Contains("owner", StringComparison.OrdinalIgnoreCase))
+                {
+                    args[i] = target;
+                    assignedTargetCreature = true;
+                    continue;
+                }
+
+                args[i] = source;
+                continue;
+            }
+
+            if (parameterType.IsAssignableFrom(source.GetType()))
+            {
+                args[i] = source;
+                continue;
+            }
+
+            if (IsNumericLike(parameterType))
+            {
+                args[i] = ConvertNumericAmount(amount, parameterType);
+                continue;
+            }
+
+            if (parameterType == typeof(bool))
+            {
+                args[i] = false;
+                continue;
+            }
+
+            if (parameter.HasDefaultValue)
+            {
+                args[i] = parameter.DefaultValue;
+                continue;
+            }
+
+            args[i] = parameterType.IsValueType ? Activator.CreateInstance(parameterType) : null;
         }
 
         return args;
