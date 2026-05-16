@@ -8,7 +8,7 @@ namespace CatastropheContract.Core;
 internal static class ModLogger
 {
     private const string Prefix = "[CatastropheContract]";
-    public const string BuildMarker = "2026-05-16-player-effects-fix-v2";
+    public const string BuildMarker = "2026-05-16-plating-bloodthirsty-v5";
     private static readonly string LogPath = Path.Combine(
         AppContext.BaseDirectory,
         "mods",

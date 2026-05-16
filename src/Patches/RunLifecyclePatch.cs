@@ -55,12 +55,14 @@ public static class RunLifecyclePatch
             case "StartCombatInternal":
                 ModLogger.Info($"Combat start hook observed via {methodName}. Build={ModLogger.BuildMarker}. Enabled={ContractStateStore.CurrentRun.Enabled}, Contracts=[{string.Join(", ", ContractStateStore.CurrentRun.SelectedContracts)}]");
                 ContractStateStore.OnCombatStarted();
+                ContractCombatRuntimeState.ResetCombat();
                 break;
             case "SetupPlayerTurn":
                 ModLogger.Info($"SetupPlayerTurn prefix observed. Build={ModLogger.BuildMarker}. PreCombatApplied={ContractStateStore.CurrentRun.PreCombatAppliedThisFight}.");
                 break;
             case "AfterCombatVictory":
             case "EndCombatInternal":
+                ContractCombatRuntimeState.ResetCombat();
                 ContractMutatorRegistry.ApplyRewardMutators(__instance);
                 break;
         }
@@ -86,14 +88,17 @@ public static class RunLifecyclePatch
                     ModLogger.Info($"Skipping pre-combat mutators at SetupPlayerTurn postfix because they were already applied. Build={ModLogger.BuildMarker}");
                 }
 
+                ContractMutatorRegistry.ApplyRecurringCombatMutators(__instance);
                 ContractMutatorRegistry.ApplyTurnRuleMutators(__instance, __args);
                 break;
             case "WinRun":
+                ContractCombatRuntimeState.ResetCombat();
                 ContractStateStore.CommitRunResult(true);
                 ContractStateStore.ResetRun();
                 break;
             case "AbandonRunAsync":
             case "GoToTimelineAfterRun":
+                ContractCombatRuntimeState.ResetCombat();
                 ContractStateStore.CommitRunResult(false);
                 ContractStateStore.ResetRun();
                 break;
