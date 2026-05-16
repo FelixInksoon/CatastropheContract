@@ -1,0 +1,11 @@
+{
+  "id": "CatastropheContract",
+  "name": "Catastrophe Contract",
+  "author": "OpenAI",
+  "description": "Adds a Catastrophe Contract custom-run framework with selectable challenge contracts, run state tracking, and best-risk records.",
+  "version": "v0.1.0",
+  "has_pck": true,
+  "has_dll": true,
+  "dependencies": ["BaseLib"],
+  "affects_gameplay": true
+}

@@ -1,0 +1,12 @@
+{
+  "cc.category.enemy_force.name": "Enemy Force",
+  "cc.category.enemy_force.subtitle": "Raise pressure through raw enemy power and opening tempo.",
+  "cc.category.player_constraint.name": "Player Constraint",
+  "cc.category.player_constraint.subtitle": "Constrict your own safety, hand, and sustain tools.",
+  "cc.category.economy_route.name": "Economy and Route",
+  "cc.category.economy_route.subtitle": "Cut resources and push riskier pathing.",
+  "cc.category.rule_mutation.name": "Rule Mutation",
+  "cc.category.rule_mutation.subtitle": "Change turn sequencing and card-play assumptions.",
+  "cc.category.boss_pressure.name": "Boss Pressure",
+  "cc.category.boss_pressure.subtitle": "Make the late game feel structurally different."
+}
