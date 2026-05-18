@@ -22,6 +22,7 @@ public partial class ContractPanelNode : Control
     private Button? _closeButton;
     private Label? _headerLabel;
     private Label? _subheaderLabel;
+    private OptionButton? _categoryPicker;
 
     public override void _Ready()
     {
@@ -192,6 +193,27 @@ public partial class ContractPanelNode : Control
         _clearButton.Pressed += OnClearPressed;
         buttons.AddChild(_clearButton);
 
+        HBoxContainer categoryRow = new()
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        categoryRow.AddThemeConstantOverride("separation", 8);
+        rootVBox.AddChild(categoryRow);
+
+        Label categoryLabel = new()
+        {
+            Text = "Category",
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        categoryRow.AddChild(categoryLabel);
+
+        _categoryPicker = new OptionButton
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        _categoryPicker.ItemSelected += OnCategorySelected;
+        categoryRow.AddChild(_categoryPicker);
+
         HSplitContainer body = new() { SizeFlagsVertical = SizeFlags.ExpandFill };
         rootVBox.AddChild(body);
 
@@ -280,32 +302,51 @@ public partial class ContractPanelNode : Control
             child.QueueFree();
         }
 
-        foreach (ContractCategoryMetadata category in ContractDatabase.AllCategories)
+        if (_categoryPicker != null)
         {
-            VBoxContainer section = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
-            section.AddThemeConstantOverride("separation", 10);
-            _categoryContainer.AddChild(section);
-
-            Label title = new()
+            _categoryPicker.Clear();
+            int selectedIndex = 0;
+            int index = 0;
+            foreach (ContractCategoryMetadata category in ContractDatabase.AllCategories)
             {
-                Text = $"{category.DisplayName}  {category.EnglishName}",
-                AutowrapMode = TextServer.AutowrapMode.WordSmart
-            };
-            title.AddThemeFontSizeOverride("font_size", 18);
-            section.AddChild(title);
+                _categoryPicker.AddItem(category.EnglishName);
+                if (category.Category == _viewModel.SelectedCategory)
+                {
+                    selectedIndex = index;
+                }
 
-            Label summary = new()
-            {
-                Text = category.Summary,
-                AutowrapMode = TextServer.AutowrapMode.WordSmart
-            };
-            summary.Modulate = new Color(0.75f, 0.77f, 0.72f);
-            section.AddChild(summary);
-
-            foreach (ContractGroupDefinition group in ContractDatabase.GetGroupsByCategory(category.Category))
-            {
-                section.AddChild(BuildGroupCard(group));
+                index++;
             }
+            _categoryPicker.Select(selectedIndex);
+        }
+
+        ContractCategoryMetadata selectedCategory =
+            ContractDatabase.AllCategories.FirstOrDefault(category => category.Category == _viewModel.SelectedCategory)
+            ?? ContractDatabase.AllCategories.First();
+
+        VBoxContainer section = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        section.AddThemeConstantOverride("separation", 10);
+        _categoryContainer.AddChild(section);
+
+        Label title = new()
+        {
+            Text = $"{selectedCategory.DisplayName}  {selectedCategory.EnglishName}",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart
+        };
+        title.AddThemeFontSizeOverride("font_size", 18);
+        section.AddChild(title);
+
+        Label summary = new()
+        {
+            Text = selectedCategory.Summary,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart
+        };
+        summary.Modulate = new Color(0.75f, 0.77f, 0.72f);
+        section.AddChild(summary);
+
+        foreach (ContractGroupDefinition group in ContractDatabase.GetGroupsByCategory(selectedCategory.Category))
+        {
+            section.AddChild(BuildGroupCard(group));
         }
 
         RefreshSummary();
@@ -314,6 +355,7 @@ public partial class ContractPanelNode : Control
     private Control BuildGroupCard(ContractGroupDefinition group)
     {
         PanelContainer card = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        bool isFocused = _viewModel?.FocusedGroupId == group.Id;
 
         MarginContainer margin = new();
         margin.AddThemeConstantOverride("margin_left", 12);
@@ -326,12 +368,15 @@ public partial class ContractPanelNode : Control
         body.AddThemeConstantOverride("separation", 8);
         margin.AddChild(body);
 
-        Label title = new()
+        Button title = new()
         {
             Text = $"{group.DisplayName}  {group.EnglishName}",
-            AutowrapMode = TextServer.AutowrapMode.WordSmart
+            Flat = true,
+            Alignment = HorizontalAlignment.Left,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
         };
         title.AddThemeFontSizeOverride("font_size", 18);
+        title.Pressed += () => OnGroupHeaderPressed(group.Id);
         body.AddChild(title);
 
         Label summary = new()
@@ -344,9 +389,33 @@ public partial class ContractPanelNode : Control
             : new Color(0.90f, 0.68f, 0.68f);
         body.AddChild(summary);
 
+        if (!isFocused)
+        {
+            ContractDefinition? collapsedLevel = group.Levels
+                .OrderBy(level => level.RiskValue)
+                .FirstOrDefault(level => _viewModel?.GetSelectedTierForGroup(group.Id) == level.Id);
+            if (collapsedLevel != null)
+            {
+                Label collapsedSelection = new()
+                {
+                    Text = $"宸查€夛細{collapsedLevel.LevelLabel}  [+{collapsedLevel.RiskValue}]",
+                    AutowrapMode = TextServer.AutowrapMode.WordSmart
+                };
+                collapsedSelection.Modulate = new Color(1.0f, 0.93f, 0.72f);
+                body.AddChild(collapsedSelection);
+            }
+
+            return card;
+        }
+
         HBoxContainer tierButtons = new();
         tierButtons.AddThemeConstantOverride("separation", 8);
         body.AddChild(tierButtons);
+
+        ContractDefinition? selectedLevel = group.Levels
+            .OrderBy(level => level.RiskValue)
+            .FirstOrDefault(level => _viewModel?.GetSelectedTierForGroup(group.Id) == level.Id)
+            ?? group.Levels.OrderBy(level => level.RiskValue).FirstOrDefault();
 
         foreach (ContractDefinition contract in group.Levels.OrderBy(level => level.RiskValue))
         {
@@ -362,14 +431,14 @@ public partial class ContractPanelNode : Control
             tierButtons.AddChild(button);
         }
 
-        foreach (ContractDefinition contract in group.Levels.OrderBy(level => level.RiskValue))
+        if (selectedLevel != null)
         {
             Label description = new()
             {
-                Text = $"{contract.LevelLabel}: {contract.Summary}" + (contract.IsImplemented ? string.Empty : " [未实装]"),
+                Text = $"{selectedLevel.LevelLabel}: {selectedLevel.Summary}" + (selectedLevel.IsImplemented ? string.Empty : " [未实装]"),
                 AutowrapMode = TextServer.AutowrapMode.WordSmart
             };
-            description.Modulate = _viewModel?.GetSelectedTierForGroup(group.Id) == contract.Id
+            description.Modulate = _viewModel?.GetSelectedTierForGroup(group.Id) == selectedLevel.Id
                 ? new Color(1.0f, 0.93f, 0.72f)
                 : new Color(0.72f, 0.74f, 0.72f);
             body.AddChild(description);
@@ -480,6 +549,34 @@ public partial class ContractPanelNode : Control
             _viewModel.SelectTier(contractId);
         }
 
+        Rebuild();
+    }
+
+    private void OnGroupHeaderPressed(string groupId)
+    {
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        _viewModel.FocusGroup(groupId);
+        Rebuild();
+    }
+
+    private void OnCategorySelected(long index)
+    {
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        ContractCategoryMetadata[] categories = ContractDatabase.AllCategories.ToArray();
+        if (index < 0 || index >= categories.Length)
+        {
+            return;
+        }
+
+        _viewModel.SetSelectedCategory(categories[index].Category);
         Rebuild();
     }
 

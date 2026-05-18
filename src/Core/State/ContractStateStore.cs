@@ -84,6 +84,7 @@ public static class ContractStateStore
         _currentRun.CurrentCombatTurn = 0;
         _currentRun.CardsPlayedThisTurn = 0;
         _currentRun.PreCombatAppliedThisFight = false;
+        _currentRun.CountdownTriggeredThisCombat = false;
     }
 
     public static void OnTurnStarted()

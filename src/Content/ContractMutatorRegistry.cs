@@ -153,7 +153,8 @@ public static class ContractMutatorRegistry
             return;
         }
 
-        if (!ContractCombatRuntimeState.MarkDamageEventProcessed(hookName, sourceCreature, targetCreature, hpLost))
+        string damageFingerprint = BuildDamageFingerprint(hookName, sourceCreature, targetCreature, hpLost, hookArgs);
+        if (!ContractCombatRuntimeState.MarkDamageEventProcessed(damageFingerprint))
         {
             return;
         }
@@ -172,7 +173,11 @@ public static class ContractMutatorRegistry
             ? ResolveBloodthirstySourceCreature(sourceCreature, playerCreature, hookArgs)
             : null;
 
-        if (hasBloodthirsty && targetIsPlayer && bloodthirstySource != null && !IsSameCreature(bloodthirstySource, playerCreature))
+        if (hasBloodthirsty
+            && string.Equals(hookName, "AfterDamageReceived", StringComparison.Ordinal)
+            && bloodthirstySource != null
+            && !IsSameCreature(bloodthirstySource, playerCreature)
+            && ShouldTriggerBloodthirstyLifesteal(hookName, bloodthirstySource, sourceCreature, targetCreature, playerCreature, targetIsPlayer))
         {
             double percent = ContractCombatRuntimeState.GetCustomStatusValue(bloodthirstySource, ContractCombatRuntimeState.BloodthirstyStatusId);
             if (percent > 0.001d)
@@ -569,12 +574,33 @@ public static class ContractMutatorRegistry
 
     private static void ApplyDeathCountdown(ContractDefinition contract, object? player, int countdownTurn)
     {
-        if (ContractStateStore.CurrentRun.CurrentCombatTurn < countdownTurn)
+        if (countdownTurn <= 0
+            || ContractStateStore.CurrentRun.CountdownTriggeredThisCombat
+            || ContractStateStore.CurrentRun.CurrentCombatTurn < countdownTurn)
         {
             return;
         }
 
-        ApplySetNumber(contract, player, 0, false, CurrentHpNames);
+        if (player == null)
+        {
+            LogMissingTarget(contract, "player");
+            return;
+        }
+
+        double? currentHp = ContractRuntimeReflection.TryGetNumber(player, CurrentHpNames);
+        if (currentHp.HasValue && currentHp.Value <= 0.001d)
+        {
+            ContractStateStore.CurrentRun.CountdownTriggeredThisCombat = true;
+            return;
+        }
+
+        bool applied = ApplySetNumber(contract, player, 0, false, CurrentHpNames);
+        if (!applied)
+        {
+            return;
+        }
+
+        ContractStateStore.CurrentRun.CountdownTriggeredThisCombat = true;
         ModLogger.Warn($"Countdown triggered for {contract.Id} on turn {ContractStateStore.CurrentRun.CurrentCombatTurn}.");
     }
 
@@ -668,16 +694,8 @@ public static class ContractMutatorRegistry
     private static void ApplyEnemyBloodthirstyStatus(ContractDefinition contract, object enemy, double percent)
     {
         ContractCombatRuntimeState.SetCustomStatusValue(enemy, ContractCombatRuntimeState.BloodthirstyStatusId, percent);
-        bool appliedVisiblePower = ContractRuntimeReflection.TryApplyPower(
-            enemy,
-            enemy,
-            percent,
-            "MegaCrit.Sts2.Core.Models.Powers.RavenousPower");
         ModLogger.Info($"Applied {contract.Id}: attached custom bloodthirsty status {percent:0.##}% to {enemy.GetType().FullName}.");
-        if (appliedVisiblePower)
-        {
-            ModLogger.Info($"Applied {contract.Id} visible power layer via MegaCrit.Sts2.Core.Models.Powers.RavenousPower amount={percent:0.##}.");
-        }
+        ModLogger.Info($"Applied {contract.Id}: skipped RavenousPower display layer because it renders as the wrong in-game status.");
     }
 
     private static void TryApplyEnemyLifesteal(object sourceCreature, double hpLost, double percent)
@@ -708,11 +726,7 @@ public static class ContractMutatorRegistry
             return;
         }
 
-        bool applied = ContractRuntimeReflection.TryHeal(sourceCreature, sourceCreature, healAmount);
-        if (!applied)
-        {
-            applied = ContractRuntimeReflection.TrySetNumber(sourceCreature, healedHp, CurrentHpNames);
-        }
+        bool applied = ContractRuntimeReflection.TrySetNumber(sourceCreature, healedHp, CurrentHpNames);
 
         if (applied)
         {
@@ -792,15 +806,35 @@ public static class ContractMutatorRegistry
             .Where(candidate => !IsSameCreature(candidate, playerCreature))
             .ToList();
 
-        object? taggedCreature = creatures.FirstOrDefault(
-            candidate => ContractCombatRuntimeState.GetCustomStatusValue(candidate, ContractCombatRuntimeState.BloodthirstyStatusId) > 0.001d);
-        if (taggedCreature != null)
+        List<object> taggedCreatures = creatures
+            .Where(candidate => ContractCombatRuntimeState.GetCustomStatusValue(candidate, ContractCombatRuntimeState.BloodthirstyStatusId) > 0.001d)
+            .ToList();
+        if (taggedCreatures.Count == 1)
         {
-            return taggedCreature;
+            return taggedCreatures[0];
         }
 
-        return ContractCombatRuntimeState.FindEnemiesWithStatus(ContractCombatRuntimeState.BloodthirstyStatusId)
-            .FirstOrDefault(candidate => !IsSameCreature(candidate, playerCreature));
+        if (taggedCreatures.Count > 1)
+        {
+            ModLogger.Debug($"Bloodthirsty source resolution was ambiguous across hook args. Candidates={taggedCreatures.Count}.");
+            return null;
+        }
+
+        List<object> trackedEnemies = ContractCombatRuntimeState.FindEnemiesWithStatus(ContractCombatRuntimeState.BloodthirstyStatusId)
+            .Where(candidate => !IsSameCreature(candidate, playerCreature))
+            .Distinct(ReferenceEqualityComparer.Instance)
+            .ToList();
+        if (trackedEnemies.Count == 1)
+        {
+            return trackedEnemies[0];
+        }
+
+        if (trackedEnemies.Count > 1)
+        {
+            ModLogger.Debug($"Bloodthirsty source resolution was ambiguous across tracked enemies. Candidates={trackedEnemies.Count}.");
+        }
+
+        return null;
     }
 
     private static bool TryExtractDamageEvent(string hookName, object[] hookArgs, out object? sourceCreature, out object? targetCreature, out double hpLost)
@@ -876,10 +910,27 @@ public static class ContractMutatorRegistry
     {
         string[] preferredMemberNames =
         {
-            "HpLost", "HealthLost", "DamageTaken", "UnblockedDamage", "FinalDamage", "ModifiedHpLost", "HpLostAfterOsty", "Amount", "_amount", "Value", "Damage"
+            "UnblockedDamage", "HpLost", "HealthLost", "DamageTaken", "ModifiedHpLost", "HpLostAfterOsty", "FinalDamage"
         };
 
         foreach (string memberName in preferredMemberNames)
+        {
+            foreach (object? arg in hookArgs)
+            {
+                if (arg == null)
+                {
+                    continue;
+                }
+
+                double? value = ContractRuntimeReflection.TryGetNumber(arg, memberName);
+                if (value.HasValue && value.Value > 0.001d)
+                {
+                    return value.Value;
+                }
+            }
+        }
+
+        foreach (string memberName in new[] { "Amount", "_amount", "Value", "Damage" })
         {
             foreach (object? arg in hookArgs)
             {
@@ -924,6 +975,67 @@ public static class ContractMutatorRegistry
         }
 
         return 0;
+    }
+
+    private static string BuildDamageFingerprint(string hookName, object? sourceCreature, object? targetCreature, double hpLost, IEnumerable<object?> hookArgs)
+    {
+        double? hpBefore = TryExtractHookNumber(hookArgs, "OldHp", "OldHealth", "PreviousHp", "PreviousHealth");
+
+        return string.Join(
+            "|",
+            hookName,
+            DescribeCreature(sourceCreature),
+            DescribeCreature(targetCreature),
+            $"lost={Math.Round(hpLost, 3, MidpointRounding.AwayFromZero):0.###}",
+            hpBefore.HasValue ? $"before={Math.Round(hpBefore.Value, 3, MidpointRounding.AwayFromZero):0.###}" : "before=?");
+    }
+
+    private static double? TryExtractHookNumber(IEnumerable<object?> hookArgs, params string[] memberNames)
+    {
+        foreach (string memberName in memberNames)
+        {
+            foreach (object? arg in hookArgs)
+            {
+                if (arg == null)
+                {
+                    continue;
+                }
+
+                double? value = ContractRuntimeReflection.TryGetNumber(arg, memberName);
+                if (value.HasValue)
+                {
+                    return value.Value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ShouldTriggerBloodthirstyLifesteal(
+        string hookName,
+        object bloodthirstySource,
+        object? parsedSourceCreature,
+        object? parsedTargetCreature,
+        object? playerCreature,
+        bool targetIsPlayer)
+    {
+        if (targetIsPlayer)
+        {
+            return true;
+        }
+
+        if (parsedSourceCreature != null
+            && IsSameCreature(bloodthirstySource, parsedSourceCreature)
+            && !IsSameCreature(parsedSourceCreature, playerCreature)
+            && !IsSameCreature(parsedSourceCreature, parsedTargetCreature))
+        {
+            ModLogger.Debug(
+                $"Bloodthirsty fallback triggered via {hookName}: healing tagged source creature because player target could not be resolved.");
+            return true;
+        }
+
+        return false;
     }
 
     private static object? TryResolveCreatureFromHookArgs(IEnumerable<object?> hookArgs, params string[] memberNames)

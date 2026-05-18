@@ -83,9 +83,9 @@ public static class ContractDatabase
     private static void SeedGroups()
     {
         AddGroup("bloodthirsty", "嗜血", "Bloodthirsty", ContractCategory.EnemyForce, "敌人造成未被格挡的伤害时，回复生命。", Node(0, 0), true, ContractApplyPhase.PreCombat,
-            Tier("I", 1, "敌人造成未被格挡的伤害时，回复该伤害值 15% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 15)),
-            Tier("II", 2, "敌人造成未被格挡的伤害时，回复该伤害值 30% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 30)),
-            Tier("III", 3, "敌人造成未被格挡的伤害时，回复该伤害值 50% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 50)));
+            Tier("I", 1, "敌人造成未被格挡的伤害时，回复该伤害值 25% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 25)),
+            Tier("II", 2, "敌人造成未被格挡的伤害时，回复该伤害值 50% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 50)),
+            Tier("III", 3, "敌人造成未被格挡的伤害时，回复该伤害值 100% 的生命值", true, Fx(ContractEffectKind.EnemyUnblockedDamageLifestealPercent, 100)));
 
         AddGroup("thorn", "荆棘", "Thorn", ContractCategory.EnemyForce, "每场战斗开始时，所有敌人获得荆棘。", Node(0, 1), true, ContractApplyPhase.PreCombat,
             Tier("I", 1, "每场战斗开始时，所有敌人获得 2 层荆棘", true, Fx(ContractEffectKind.EnemyStartWithThorns, 2)),

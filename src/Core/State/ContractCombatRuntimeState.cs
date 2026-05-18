@@ -103,10 +103,13 @@ internal static class ContractCombatRuntimeState
         return true;
     }
 
-    public static bool MarkDamageEventProcessed(string channel, object? source, object? target, double hpLost)
+    public static bool MarkDamageEventProcessed(string fingerprint)
     {
-        string fingerprint =
-            $"{channel}|{GetIdentity(source)}|{GetIdentity(target)}|{Math.Round(hpLost, 3, MidpointRounding.AwayFromZero):0.###}";
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return true;
+        }
+
         long nowTicks = Environment.TickCount64;
         if (string.Equals(_lastProcessedDamageFingerprint, fingerprint, StringComparison.Ordinal)
             && nowTicks - _lastProcessedDamageTicks <= 50)
@@ -117,16 +120,6 @@ internal static class ContractCombatRuntimeState
         _lastProcessedDamageFingerprint = fingerprint;
         _lastProcessedDamageTicks = nowTicks;
         return true;
-    }
-
-    private static string GetIdentity(object? instance)
-    {
-        if (instance == null)
-        {
-            return "null";
-        }
-
-        return $"{instance.GetType().FullName}@{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(instance)}";
     }
 
     private sealed class ReferenceEqualityComparer : IEqualityComparer<object>

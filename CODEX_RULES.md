@@ -8,7 +8,7 @@ It is not meant to replay the whole chat history. It should tell the next agent:
 - what the mod currently is
 - what has already been fixed
 - what is stable
-- what is only “implemented in code but not yet proven”
+- what is implemented but not yet user-verified
 - what the current risky areas are
 - what should be done next
 
@@ -27,7 +27,7 @@ When sources conflict, use this priority:
 
 - Mod name: `CatastropheContract`
 - Target game: Slay the Spire 2
-- Feature: add a “Catastrophe Contract” challenge system to `Custom Run / 自定义模式`
+- Feature: add a `Catastrophe Contract` challenge system to `Custom Run / 自定义模式`
 - Technical style: official mod loading + `BaseLib` + `Harmony` + heavy runtime reflection
 
 Design constraints that remain true:
@@ -64,7 +64,7 @@ Design constraints that remain true:
 - `src/Patches/CombatHookPatch.cs`
   Hooks combat damage/turn-related `Hook.*` methods.
 - `src/Patches/HealingPatch.cs`
-  Global `Heal` interception for `run_out`.
+  Global heal interception for `run_out`.
 
 ### UI / Godot
 
@@ -106,17 +106,23 @@ The currently-correct direction is:
 
 This matters because earlier failures came from:
 
-- wrong assembly name (`CatastropheContract.new`)
+- wrong assembly name
 - missing Godot generated script metadata
 - injecting an empty runtime-only UI shell instead of the scene-backed implementation
 
 ### Build identity
 
-Current latest build marker in source:
+Current effective build marker in source:
 
-- `2026-05-16-plating-bloodthirsty-v5`
+- `2026-05-18-bloodthirsty-runout-countdown-v1`
 
 Always ask the user to fully restart the game and confirm the build marker in logs when validating behavior.
+
+Important rollback note:
+
+- later experimental Ascension-only changes (`v15`, `v16`) were reverted
+- the current line moved forward again from the earlier `v5` rollback baseline
+- do not assume any later Ascension-specific experiment is still live unless current source proves it
 
 ---
 
@@ -154,41 +160,39 @@ These were real issues during this thread and were addressed in code:
 - `secret_battle`
 - `high_valued_object`
 - `activating`
-- UI now appears
-- combat no longer freezes on battle start
-
-### Implemented in code, but should still be treated as needing verification
-
+- `debris_covered`
 - `thorn`
 - `great_awakening`
 - `metallization`
 - `industrialization`
-- `economic_crisis`
-- `run_out`
-- `tightened_belt`
-- `ultimate_defense`
-- `countdown`
+- UI now appears
+- combat no longer freezes on battle start
 
 ### In progress right now
-
-- `debris_covered`
-  - visible `PlatingPower` now appears
-  - user reported it did not benefit the first turn correctly
-  - latest code in `v5` now also grants immediate block on application
-  - this latest adjustment is not yet user-verified
 
 - `bloodthirsty`
   - older hidden runtime-only version was not acceptable
   - current direction is:
     - runtime custom status value on enemy
     - visible power layer via `MegaCrit.Sts2.Core.Models.Powers.RavenousPower`
-    - actual healing handled by our own combat hook logic
-  - user reported earlier versions had neither visible status nor actual lifesteal
-  - latest `v5` expands damage-hook coverage and re-adds visible `RavenousPower`
-  - this latest adjustment is not yet user-verified
+    - actual healing handled by combat hook logic
+  - current implementation priority is stabilizing source resolution and cross-hook dedupe
+  - do not mark this as done without fresh user validation
+
+### Implemented in current build, but not yet user-verified end to end
+
+- `run_out`
+  - current direction is global heal interception
+  - latest implementation also covers async heal paths and explicit rest-site style heal methods
+- `countdown`
+  - current direction is a turn-rule kill switch
+  - latest implementation guards against repeated triggering within the same combat
 
 ### Still not implemented or not production-ready
 
+- `economic_crisis`
+- `tightened_belt`
+- `ultimate_defense`
 - `swarming_elites`
 - `congregating_bosses`
 - `malaise`
@@ -213,6 +217,40 @@ Do not describe it as fully proven.
 
 ## Current Technical Notes
 
+### Mechanism implementation layers
+
+Treat future contract work as one of these three buckets before choosing a patch strategy:
+
+1. Vanilla feature extension
+   - prefer original `PowerCmd.Apply`, `CreatureCmd.Heal`, HP/block/gold/potion fields, and normal run/combat lifecycle patches
+2. Hook-composed feature
+   - combine combat hooks, custom runtime state, and selective reuse of vanilla powers for display or partial behavior
+3. Structural patch
+   - map generation, reward generation, route structure, or other system-level rewrites that need dedicated patch points
+
+### Confirmed high-value runtime entry points
+
+These names have been confirmed from current source assumptions plus `sts2.dll` metadata inspection and should remain the first places to look:
+
+- `PowerCmd.Apply`
+- `CreatureCmd.Heal`
+- `CombatManager.StartCombatInternal`
+- `CombatManager.SetupPlayerTurn`
+- `CombatManager.EndCombatInternal`
+- `RunManager.StartRun`
+- `RunManager.AbandonRunAsync`
+- `RunManager.GoToTimelineAfterRun`
+- `Hook.AfterDamageGiven`
+- `Hook.AfterDamageReceived`
+- `Hook.AfterSideTurnStart`
+- `Hook.AfterPlayerTurnStart`
+- `ModifyGeneratedMap`
+- `ModifyCardRewardCreationOptions`
+- `AfterModifyingCardRewardOptions`
+- `RewardsCmd.OfferForRoomEnd`
+- `CardPileCmd.Add`
+- `CardPileCmd.RemoveFromDeck`
+
 ### Player/enemy resolution
 
 The runtime often exposes:
@@ -230,13 +268,14 @@ If a future change breaks effects again, inspect:
 
 ### Healing / no-heal
 
-`run_out` depends on `HealingPatch`, which scans all `Heal` methods in `sts2` and rolls player HP back if healing occurred.
-This is powerful but broad and fragile.
+`run_out` depends on `HealingPatch`, which scans `Heal` methods in `sts2`, adds explicit non-`Heal` rest-site style targets, and rolls player HP back if healing occurred.
+This is powerful but broad and still somewhat fragile.
 Be cautious when changing:
 
 - `TryHeal`
 - `HealingPatch`
-- global hook coverage
+- explicit heal target lists
+- async task completion handling
 
 ### Power application
 
@@ -247,7 +286,7 @@ Important real observations from logs:
 
 - `PlatingPower` applies through `PowerCmd.Apply(...)`
 - `RavenousPower` has previously appeared successfully on enemies in older builds
-- `CoveredPower` was wrong for current `debris_covered` expectations because the user explicitly wants `Plating`, not `Covered`
+- `CoveredPower` was wrong for `debris_covered` because the user explicitly wants `Plating`, not `Covered`
 
 ### Combat hook coverage
 
@@ -259,6 +298,7 @@ Current damage-related coverage includes:
 - `AfterModifyingHpLostAfterOsty`
 
 This was expanded because earlier lifesteal logic missed real player HP loss events.
+The current implementation also tries to dedupe equivalent observations across multiple hook channels.
 
 ### Duplicate patch risk
 
@@ -277,7 +317,7 @@ Do not casually change:
 - Godot generated file inclusion
 - scene script path assumptions
 
-If you break any of those, the UI can “load” but instantiate no real script.
+If you break any of those, the UI can appear to load but instantiate no real script.
 
 ### 2. `ContractRuntimeReflection.cs` is powerful but brittle
 
@@ -291,10 +331,10 @@ After any meaningful reflection change, regression-test at least:
 - `high_valued_object`
 - `run_out`
 
-### 3. `debris_covered` and `bloodthirsty` are the current hotspot
+### 3. `bloodthirsty` is the current hotspot
 
-These two are the most actively changing features right now.
-Do not mark either one as “done” without explicit user confirmation.
+This is the most actively changing gameplay feature right now.
+Do not mark it as complete without explicit user confirmation.
 
 ### 4. `README.md` is stale
 
@@ -307,7 +347,7 @@ The user often validates through:
 
 - `C:\Users\91395\AppData\Roaming\SlayTheSpire2\logs\godot.log`
 - `E:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64\mods\CatastropheContract\debug.log`
-- manually extracted tails like `D:\临时\后两百行.txt`
+- manually extracted log tails
 
 When debugging, always key off exact build markers and exact latest log segments.
 
@@ -335,10 +375,18 @@ High-level chronology:
 10. Switched `debris_covered` toward visible `PlatingPower`.
 11. Reintroduced visible `RavenousPower` as a display layer for `bloodthirsty`.
 12. Expanded combat damage hook coverage for lifesteal.
-13. Latest unresolved user feedback:
-   - plating visible, but not helping from turn one as expected
-   - bloodthirsty still lacked visible display and real effect
-14. Latest code (`v5`) addresses both of those, but is not yet confirmed by the user.
+13. User later confirmed `debris_covered / 覆甲` is now working correctly.
+14. Work temporarily shifted to Ascension conflict handling on another machine.
+15. Two experimental Ascension-only follow-up builds were made:
+   - `v15`
+   - `v16`
+16. Those Ascension changes were not kept.
+17. The user explicitly asked to roll back to the version from before Ascension changes.
+18. The current implementation line then moved forward again from that rollback baseline.
+19. The current build focuses on:
+   - `bloodthirsty` dedupe and source resolution
+   - `run_out` async/special heal interception
+   - `countdown` single-trigger behavior
 
 ---
 
@@ -346,18 +394,23 @@ High-level chronology:
 
 Priority order from the live state of this thread:
 
-1. Re-test `debris_covered`
-   - confirm visible plating appears
-   - confirm first-turn benefit is now correct
-2. Re-test `bloodthirsty`
+1. Re-test `bloodthirsty`
    - confirm visible `RavenousPower` layer appears on enemies
    - confirm actual healing happens after enemy deals real HP loss
-3. Only after those two are solid:
+   - confirm multi-hook observation no longer causes duplicate healing
+2. Re-test `run_out`
+   - confirm combat, rest-site, and other async heal paths are blocked for the player
+   - confirm enemy healing is not blocked by mistake
+3. Re-test `countdown`
+   - confirm it triggers exactly once when the configured turn threshold is reached
+   - confirm state resets correctly between combats
+4. Revisit Ascension conflict handling only after the current gameplay hotspots are stable.
+   - do not build on `v15`/`v16`; start from the rolled-back behavior if revisiting
+5. Only after those are solid:
    - prepare/implement `ultimate_defense`
-   - prepare/implement `countdown`
    - prepare/implement `counterforce`
 
-Do not move on to claiming those later special-rule contracts are complete before the current two are closed.
+Do not move on to claiming later special-rule contracts are complete before these current hotspots are closed.
 
 ---
 
@@ -372,17 +425,24 @@ After changing gameplay code, prefer this validation checklist:
 - confirm latest build marker in logs
 - confirm exact contract list in logs
 
-For `debris_covered`, check:
-
-- visible `PlatingPower` on enemy
-- first-turn effect
-- stack loss behavior after HP damage if fallback runtime logic is still in play
-
 For `bloodthirsty`, check:
 
 - visible status exists on enemy
 - damage hook fires on real player HP loss
 - heal amount matches contract percentage
+- multi-hook observations do not double-heal
+
+For `run_out`, check:
+
+- combat healing is blocked
+- rest-site or similar non-combat heal paths are blocked
+- enemy healing still works when the player is not the target
+
+For `countdown`, check:
+
+- no trigger before the configured turn
+- exactly one trigger on the threshold turn
+- no stale trigger carries into the next combat
 
 If logs and user-visible behavior conflict, believe the user-visible behavior first and use logs only to explain why.
 
@@ -390,5 +450,10 @@ If logs and user-visible behavior conflict, believe the user-visible behavior fi
 
 ## File Naming Note
 
-The repository currently contains `CODEX_RULES.md`.
-If a future instruction says `CODEX_RULE.md`, treat it as referring to this file unless the user explicitly asks for a second separate rule file.
+The repository now contains:
+
+- `CODEX_RULE.md`
+- `CODEX_RULES.md`
+
+`CODEX_RULE.md` is only a thin alias and should keep pointing at `CODEX_RULES.md`.
+The detailed handoff belongs in `CODEX_RULES.md`.

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using CatastropheContract.Content;
 using CatastropheContract.Core;
 using CatastropheContract.Core.State;
@@ -13,6 +14,11 @@ namespace CatastropheContract.Patches;
 public static class HealingPatch
 {
     private sealed record HealSnapshot(object Target, double HealthBefore);
+    private static readonly (string TypeName, string MethodName)[] ExplicitMethodTargets =
+    {
+        ("MegaCrit.Sts2.Core.Commands.PlayerCmd", "MimicRestSiteHeal"),
+        ("MegaCrit.Sts2.Core.Entities.RestSite.HealRestSiteOption", "ExecuteRestSiteHeal")
+    };
 
     static IEnumerable<MethodBase> TargetMethods()
     {
@@ -23,6 +29,11 @@ public static class HealingPatch
         }
 
         HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (MethodBase method in GetExplicitTargets(sts2, seen))
+        {
+            yield return method;
+        }
+
         foreach (Type type in GetTypesSafe(sts2))
         {
             MethodInfo[] methods;
@@ -73,29 +84,75 @@ public static class HealingPatch
         ModLogger.Info($"HealingPatch observed {DescribeMethod(__originalMethod)} on {target.GetType().FullName} with health {hp.Value:0.##}.");
     }
 
-    static void Postfix(MethodBase __originalMethod, HealSnapshot? __state)
+    static void Postfix(MethodBase __originalMethod, object? __result, HealSnapshot? __state)
     {
         if (__state == null)
         {
             return;
         }
 
-        double? hpAfter = ContractRuntimeReflection.TryGetNumber(__state.Target, "CurrentHp", "Health", "Hp", "_health", "_hp");
-        if (!hpAfter.HasValue || hpAfter.Value <= __state.HealthBefore + 0.001d)
+        if (__result is Task task)
+        {
+            task.ContinueWith(
+                completedTask =>
+                {
+                    if (completedTask.IsFaulted || completedTask.IsCanceled)
+                    {
+                        return;
+                    }
+
+                    TryRollbackHealing(__originalMethod, __state);
+                },
+                TaskScheduler.Default);
+            return;
+        }
+
+        TryRollbackHealing(__originalMethod, __state);
+    }
+
+    private static IEnumerable<MethodBase> GetExplicitTargets(Assembly sts2, ISet<string> seen)
+    {
+        foreach ((string typeName, string methodName) in ExplicitMethodTargets)
+        {
+            Type? type = sts2.GetType(typeName, false);
+            if (type == null)
+            {
+                continue;
+            }
+
+            foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)
+                         .Where(candidate => string.Equals(candidate.Name, methodName, StringComparison.Ordinal)))
+            {
+                string key = $"{type.FullName}::{method}";
+                if (!seen.Add(key))
+                {
+                    continue;
+                }
+
+                ModLogger.Info($"HealingPatch targeting {type.FullName}.{method.Name}");
+                yield return method;
+            }
+        }
+    }
+
+    private static void TryRollbackHealing(MethodBase originalMethod, HealSnapshot state)
+    {
+        double? hpAfter = ContractRuntimeReflection.TryGetNumber(state.Target, "CurrentHp", "Health", "Hp", "_health", "_hp");
+        if (!hpAfter.HasValue || hpAfter.Value <= state.HealthBefore + 0.001d)
         {
             return;
         }
 
-        bool reverted = ContractRuntimeReflection.TrySetNumber(__state.Target, __state.HealthBefore, "CurrentHp", "Health", "Hp", "_health", "_hp");
+        bool reverted = ContractRuntimeReflection.TrySetNumber(state.Target, state.HealthBefore, "CurrentHp", "Health", "Hp", "_health", "_hp");
         if (reverted)
         {
             ModLogger.Info(
-                $"HealingPatch blocked healing from {DescribeMethod(__originalMethod)}. Restored HP from {hpAfter.Value:0.##} to {__state.HealthBefore:0.##}.");
+                $"HealingPatch blocked healing from {DescribeMethod(originalMethod)}. Restored HP from {hpAfter.Value:0.##} to {state.HealthBefore:0.##}.");
         }
         else
         {
             ModLogger.Warn(
-                $"HealingPatch detected healing via {DescribeMethod(__originalMethod)} but could not restore HP on {__state.Target.GetType().FullName}.");
+                $"HealingPatch detected healing via {DescribeMethod(originalMethod)} but could not restore HP on {state.Target.GetType().FullName}.");
         }
     }
 

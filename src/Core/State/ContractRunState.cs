@@ -13,5 +13,6 @@ public sealed class ContractRunState
     public int CurrentCombatTurn { get; set; }
     public int CardsPlayedThisTurn { get; set; }
     public bool PreCombatAppliedThisFight { get; set; }
+    public bool CountdownTriggeredThisCombat { get; set; }
     public List<string> AppliedRunStartContracts { get; set; } = new();
 }
